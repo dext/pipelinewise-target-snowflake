@@ -11,7 +11,7 @@ import copy
 from typing import Dict, List, Optional
 from joblib import Parallel, delayed, parallel_backend
 from jsonschema import Draft7Validator, FormatChecker
-from singer import get_logger
+from singer import get_logger, get_bookmark
 from datetime import datetime, timedelta
 
 from target_snowflake.file_formats import csv
@@ -333,6 +333,18 @@ def persist_lines(config, lines, table_cache=None, file_format_type: FileFormatT
 
     # emit latest state
     emit_state(copy.deepcopy(flushed_state))
+
+    # After all changes are imported to snowflake emit state with new flushed_lsn values
+    if not flushed_state is None and 'bookmarks' in flushed_state:
+        lsn_list = [get_bookmark(flushed_state, s, 'lsn') for s in flushed_state["bookmarks"] if 'lsn' in flushed_state["bookmarks"][s]]
+        if lsn_list:
+            int_lsn_list = [l for l in lsn_list if l is not None]
+
+            if int_lsn_list:
+                flushed_state["lsn_to_flush"] = max(int_lsn_list)
+                emit_state(copy.deepcopy(flushed_state))
+
+    LOGGER.info("Finish loading %s streams!", str(len(stream_to_sync)))
 
 
 # pylint: disable=too-many-arguments
