@@ -19,6 +19,7 @@ def create_copy_sql(table_name: str,
 
     return f"COPY INTO {table_name} ({p_columns}) " \
            f"FROM '@{stage_name}/{s3_key}' " \
+           f"ON_ERROR = CONTINUE " \
            f"FILE_FORMAT = (format_name='{file_format_name}')"
 
 
