@@ -7,7 +7,6 @@ import logging
 import os
 import sys
 import copy
-import datetime
 
 from typing import Dict, List, Optional
 from joblib import Parallel, delayed, parallel_backend
@@ -528,7 +527,7 @@ def main():
     if args.config:
         with open(args.config, encoding="utf8") as config_input:
             config = json.load(config_input)
-            date_is = datetime.datetime.now().strftime("%Y-%m-%d")
+            date_is = datetime.now().strftime("%Y-%m-%d")
             config["s3_key_prefix"] = f"{config['s3_key_prefix']}{date_is}_pid_{str(os.getpid())}/"
     else:
         config = {}
