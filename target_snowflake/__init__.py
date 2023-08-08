@@ -527,7 +527,8 @@ def main():
     if args.config:
         with open(args.config, encoding="utf8") as config_input:
             config = json.load(config_input)
-            config["s3_key_prefix"] = f"{config['s3_key_prefix']}pid_{str(os.getpid())}/"
+            date_is = datetime.now().strftime("%Y-%m-%d")
+            config["s3_key_prefix"] = f"{config['s3_key_prefix']}{date_is}_pid_{str(os.getpid())}/"
     else:
         config = {}
 
