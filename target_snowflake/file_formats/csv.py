@@ -41,7 +41,7 @@ def create_merge_sql(table_name: str,
     return f"MERGE INTO {table_name} t USING (" \
            f"SELECT {p_source_columns} " \
            f"FROM '@{stage_name}/{s3_prefix}' " \
-           f"(FILE_FORMAT => '{file_format_name}'), PATTERN => '{s3_key}') s " \
+           f"(FILE_FORMAT => '{file_format_name}', PATTERN => '{s3_key}') ) s " \
            f"ON {pk_merge_condition} " \
            f"WHEN MATCHED THEN UPDATE SET {p_update} " \
            "WHEN NOT MATCHED THEN " \
