@@ -436,7 +436,7 @@ class DbSync:
         table_name = self.table_name(stream, False, without_schema=True)
         return f"{self.schema_name}.%{table_name}"
 
-    def load_file(self, s3_key, count, size_bytes):
+    def load_file(self, s3_prefix, s3_key, count, size_bytes):
         """Load a supported file type from snowflake stage into target table"""
         stream = self.stream_schema_message['stream']
         self.logger.info("Loading %d rows into '%s'", count, self.table_name(stream, False))
@@ -459,6 +459,7 @@ class DbSync:
             try:
                 inserts, updates = self._load_file_merge(
                     s3_key=s3_key,
+                    s3_prefix=s3_prefix,
                     stream=stream,
                     columns_with_trans=columns_with_trans
                 )
@@ -474,6 +475,7 @@ class DbSync:
             try:
                 inserts, updates = (
                     self._load_file_copy(
+                        s3_prefix=s3_prefix,
                         s3_key=s3_key,
                         stream=stream,
                         columns_with_trans=columns_with_trans
@@ -493,7 +495,7 @@ class DbSync:
             json.dumps({'inserts': inserts, 'updates': updates, 'size_bytes': size_bytes})
         )
 
-    def _load_file_merge(self, s3_key, stream, columns_with_trans) -> Tuple[int, int]:
+    def _load_file_merge(self, s3_key, s3_prefix, stream, columns_with_trans) -> Tuple[int, int]:
         # MERGE does insert and update
         inserts = 0
         updates = 0
@@ -502,12 +504,13 @@ class DbSync:
                 merge_sql = self.file_format.formatter.create_merge_sql(
                     table_name=self.table_name(stream, False),
                     stage_name=self.get_stage_name(stream),
+                    s3_prefix=s3_prefix,
                     s3_key=s3_key,
                     file_format_name=self.connection_config['file_format'],
                     columns=columns_with_trans,
                     pk_merge_condition=self.primary_key_merge_condition()
                 )
-                self.logger.debug('Running query: %s', merge_sql)
+                self.logger.info('Running query: %s', merge_sql)
                 cur.execute(merge_sql)
                 # Get number of inserted and updated records
                 results = cur.fetchall()
@@ -516,7 +519,7 @@ class DbSync:
                     updates = results[0].get('number of rows updated', 0)
         return inserts, updates
 
-    def _load_file_copy(self, s3_key, stream, columns_with_trans) -> int:
+    def _load_file_copy(self, s3_key, s3_prefix, stream, columns_with_trans) -> int:
         # COPY does insert only
         inserts = 0
         with self.open_connection() as connection:
@@ -524,11 +527,12 @@ class DbSync:
                 copy_sql = self.file_format.formatter.create_copy_sql(
                     table_name=self.table_name(stream, False),
                     stage_name=self.get_stage_name(stream),
+                    s3_prefix=s3_prefix,
                     s3_key=s3_key,
                     file_format_name=self.connection_config['file_format'],
                     columns=columns_with_trans
                 )
-                self.logger.debug('Running query: %s', copy_sql)
+                self.logger.info('Running query: %s', copy_sql)
                 cur.execute(copy_sql)
                 # Get number of inserted records - COPY does insert only
                 results = cur.fetchall()

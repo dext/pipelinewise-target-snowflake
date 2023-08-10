@@ -334,6 +334,15 @@ def persist_lines(config, lines, table_cache=None, file_format_type: FileFormatT
     # emit latest state
     emit_state(copy.deepcopy(flushed_state))
 
+    # After all changes are flushed to S3 files we are trigering imports for each stream
+    for load_stream_name in stream_to_sync:
+        LOGGER.info("Start snowflake import from S3 for streams %s", load_stream_name)
+        tmp_db_sync = stream_to_sync[load_stream_name]
+        s3_key = f".*pipelinewise_{load_stream_name}_([0-9]{{2}})h([0-9]{{2}})m([0-9]{{2}})s.*[.]csv"
+        tmp_db_sync.load_file(config['s3_key_prefix'], s3_key, 0, 0)
+        ## Replacing deleting of stage files withe S3 lifecycle
+        # tmp_db_sync.delete_from_stage(load_stream_name, config['s3_key_prefix'])
+
     # After all changes are imported to snowflake emit state with new flushed_lsn values
     if not flushed_state is None and 'bookmarks' in flushed_state:
         lsn_list = [get_bookmark(flushed_state, s, 'lsn') for s in flushed_state["bookmarks"] if 'lsn' in flushed_state["bookmarks"][s]]
@@ -476,47 +485,12 @@ def flush_records(stream: str,
 
     # Get file stats
     row_count = len(records)
-    size_bytes = os.path.getsize(filepath)
 
     # Upload to s3 and load into Snowflake
-    s3_key = db_sync.put_to_stage(filepath, stream, row_count, temp_dir=temp_dir)
-    db_sync.load_file(s3_key, row_count, size_bytes)
+    db_sync.put_to_stage(filepath, stream, row_count, temp_dir=temp_dir)
 
     # Delete file from local disk
     os.remove(filepath)
-
-    if archive_load_files:
-        stream_name_parts = stream_utils.stream_name_to_dict(stream)
-        if 'schema_name' not in stream_name_parts or 'table_name' not in stream_name_parts:
-            raise Exception(f"Failed to extract schema and table names from stream '{stream}'")
-
-        archive_schema = stream_name_parts['schema_name']
-        archive_table = stream_name_parts['table_name']
-        archive_tap = archive_load_files['tap']
-
-        archive_metadata = {
-            'tap': archive_tap,
-            'schema': archive_schema,
-            'table': archive_table,
-            'archived-by': 'pipelinewise_target_snowflake'
-        }
-
-        if 'column' in archive_load_files:
-            archive_metadata.update({
-                'incremental-key': archive_load_files['column'],
-                'incremental-key-min': str(archive_load_files['min']),
-                'incremental-key-max': str(archive_load_files['max'])
-            })
-
-        # Use same file name as in import
-        archive_file = os.path.basename(s3_key)
-        archive_key = f"{archive_tap}/{archive_table}/{archive_file}"
-
-        db_sync.copy_to_archive(s3_key, archive_key, archive_metadata)
-
-    # Delete file from S3
-    db_sync.delete_from_stage(stream, s3_key)
-
 
 def main():
     """Main function"""
@@ -527,8 +501,8 @@ def main():
     if args.config:
         with open(args.config, encoding="utf8") as config_input:
             config = json.load(config_input)
-            date_is = datetime.now().strftime("%Y-%m-%d")
-            config["s3_key_prefix"] = f"{config['s3_key_prefix']}{date_is}_pid_{str(os.getpid())}/"
+            timestamp_is = datetime.now().strftime("%Y-%m-%d–%Hh-%Mm")
+            config["s3_key_prefix"] = f"{config['s3_key_prefix']}{timestamp_is}_pid_{str(os.getpid())}/"
     else:
         config = {}
 

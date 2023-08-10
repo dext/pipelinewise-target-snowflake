@@ -11,6 +11,7 @@ from target_snowflake import flattening
 
 def create_copy_sql(table_name: str,
                     stage_name: str,
+                    s3_prefix: str,
                     s3_key: str,
                     file_format_name: str,
                     columns: List):
@@ -18,13 +19,15 @@ def create_copy_sql(table_name: str,
     p_columns = ', '.join([c['name'] for c in columns])
 
     return f"COPY INTO {table_name} ({p_columns}) " \
-           f"FROM '@{stage_name}/{s3_key}' " \
+           f"FROM '@{stage_name}/{s3_prefix}' " \
+           f"PATTERN = '{s3_key}' " \
            f"ON_ERROR = CONTINUE " \
            f"FILE_FORMAT = (format_name='{file_format_name}')"
 
 
 def create_merge_sql(table_name: str,
                      stage_name: str,
+                     s3_prefix: str,
                      s3_key: str,
                      file_format_name: str,
                      columns: List,
@@ -37,8 +40,8 @@ def create_merge_sql(table_name: str,
 
     return f"MERGE INTO {table_name} t USING (" \
            f"SELECT {p_source_columns} " \
-           f"FROM '@{stage_name}/{s3_key}' " \
-           f"(FILE_FORMAT => '{file_format_name}')) s " \
+           f"FROM '@{stage_name}/{s3_prefix}' " \
+           f"(FILE_FORMAT => '{file_format_name}'), PATTERN => '{s3_key}') s " \
            f"ON {pk_merge_condition} " \
            f"WHEN MATCHED THEN UPDATE SET {p_update} " \
            "WHEN NOT MATCHED THEN " \
