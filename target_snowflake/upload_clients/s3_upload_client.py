@@ -105,3 +105,15 @@ class S3UploadClient(BaseUploadClient):
         # https://boto3.amazonaws.com/v1/documentation/api/latest/reference/services/s3.html#S3.Client.copy_object
         self.s3_client.copy_object(CopySource=copy_source, Bucket=target_bucket, Key=target_key,
                                    Metadata=metadata, MetadataDirective="REPLACE")
+
+    def objects_list(self, prefix, stream):
+        staged_files = []
+        staged_files_size = 0
+        stream_prefix = f'{prefix}pipelinewise_{stream}_'
+        files = self.s3_client.list_objects(Bucket=self.connection_config['s3_bucket'], Prefix=stream_prefix)
+        if 'Contents' in files:
+            for s3_file in files['Contents']:
+                staged_files.append(s3_file['Key'])
+                staged_files_size += s3_file['Size']
+
+        return staged_files, staged_files_size
