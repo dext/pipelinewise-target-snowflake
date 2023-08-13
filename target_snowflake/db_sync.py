@@ -537,7 +537,7 @@ class DbSync:
                 # Get number of inserted records - COPY does insert only
                 results = cur.fetchall()
                 if len(results) > 0:
-                    inserts = results[0].get('rows_loaded', 0)
+                    inserts = sum([r.get('rows_loaded', 0) for r in results])
         return inserts
 
     def primary_key_merge_condition(self):
