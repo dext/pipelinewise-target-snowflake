@@ -439,6 +439,12 @@ class DbSync:
     def load_file(self, s3_prefix, s3_key, count, size_bytes):
         """Load a supported file type from snowflake stage into target table"""
         stream = self.stream_schema_message['stream']
+        s3_keys_list, size_bytes = self.upload_client.objects_list(s3_prefix, stream)
+
+        if len(s3_keys_list) == 0:
+            self.logger.info("No files to import for '%s' in prefix '%s'!", self.table_name(stream, False), s3_prefix)
+            return
+
         self.logger.info("Loading %d rows into '%s'", count, self.table_name(stream, False))
 
         # Get list if columns with types
