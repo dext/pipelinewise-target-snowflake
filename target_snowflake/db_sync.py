@@ -14,6 +14,9 @@ from target_snowflake.exceptions import TooManyRecordsException, PrimaryKeyNotFo
 from target_snowflake.upload_clients.s3_upload_client import S3UploadClient
 from target_snowflake.upload_clients.snowflake_upload_client import SnowflakeUploadClient
 
+from cryptography.hazmat.backends import default_backend
+from cryptography.hazmat.primitives import serialization
+
 
 def validate_config(config):
     """Validate configuration"""
@@ -33,7 +36,6 @@ def validate_config(config):
         'account',
         'dbname',
         'user',
-        'password',
         'warehouse',
         'file_format'
     ]
@@ -285,6 +287,25 @@ class DbSync:
         else:
             self.upload_client = SnowflakeUploadClient(connection_config, self)
 
+
+    def load_private_key(self):
+        if 'private_key' not in self.connection_config:
+            return
+
+        private_key = serialization.load_pem_private_key(
+            self.connection_config['private_key'].encode(),
+            password=self.connection_config.get('private_key_password'),
+            backend=default_backend()
+        )
+
+        bytes = private_key.private_bytes(
+            encoding=serialization.Encoding.DER,
+            format=serialization.PrivateFormat.PKCS8,
+            encryption_algorithm=serialization.NoEncryption()
+        )
+
+        return bytes
+
     def open_connection(self):
         """Open snowflake connection"""
         stream = None
@@ -293,13 +314,13 @@ class DbSync:
 
         return snowflake.connector.connect(
             user=self.connection_config['user'],
-            password=self.connection_config['password'],
-            private_key=self.connection_config.get('private_key', None),
-            private_key_file_pwd=self.connection_config.get('private_key_password', None),
+            password=self.connection_config.get('password'),
+            private_key=self.load_private_key(),
+            authenticator=self.connection_config.get('authenticator'),
             account=self.connection_config['account'],
             database=self.connection_config['dbname'],
             warehouse=self.connection_config['warehouse'],
-            role=self.connection_config.get('role', None),
+            role=self.connection_config.get('role'),
             autocommit=True,
             session_parameters={
                 # Quoted identifiers should be case sensitive
