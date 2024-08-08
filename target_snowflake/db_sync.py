@@ -190,6 +190,7 @@ class DbSync:
                                     collecting catalog informations from Snowflake for caching
                                     purposes.
         """
+        self._connection = None
         self.connection_config = connection_config
         self.stream_schema_message = stream_schema_message
         self.table_cache = table_cache
@@ -306,30 +307,37 @@ class DbSync:
         return bytes
 
     def open_connection(self):
-        """Open snowflake connection"""
-        stream = None
-        if self.stream_schema_message:
-            stream = self.stream_schema_message['stream']
+        if self._connection is None:
+            """Open snowflake connection"""
+            stream = None
+            if self.stream_schema_message:
+                stream = self.stream_schema_message['stream']
 
-        return snowflake.connector.connect(
-            user=self.connection_config['user'],
-            password=self.connection_config.get('password'),
-            private_key=self.load_private_key(),
-            authenticator=self.connection_config.get('authenticator'),
-            account=self.connection_config['account'],
-            database=self.connection_config['dbname'],
-            warehouse=self.connection_config['warehouse'],
-            role=self.connection_config.get('role'),
-            autocommit=True,
-            session_parameters={
-                # Quoted identifiers should be case sensitive
-                'QUOTED_IDENTIFIERS_IGNORE_CASE': 'FALSE',
-                'QUERY_TAG': create_query_tag(self.connection_config.get('query_tag'),
-                                              database=self.connection_config['dbname'],
-                                              schema=self.schema_name,
-                                              table=self.table_name(stream, False, True))
-            }
-        )
+            self.logger.info("------------------------")
+            self.logger.info(f"New connection for table {self.table_name(stream, False)}")
+            self.logger.info("------------------------")
+
+            self._connection = snowflake.connector.connect(
+                user=self.connection_config['user'],
+                password=self.connection_config.get('password'),
+                private_key=self.load_private_key(),
+                authenticator=self.connection_config.get('authenticator'),
+                account=self.connection_config['account'],
+                database=self.connection_config['dbname'],
+                warehouse=self.connection_config['warehouse'],
+                role=self.connection_config.get('role'),
+                autocommit=True,
+                session_parameters={
+                    # Quoted identifiers should be case sensitive
+                    'QUOTED_IDENTIFIERS_IGNORE_CASE': 'FALSE',
+                    'QUERY_TAG': create_query_tag(self.connection_config.get('query_tag'),
+                                                  database=self.connection_config['dbname'],
+                                                  schema=self.schema_name,
+                                                  table=self.table_name(stream, False, True))
+                }
+            )
+
+        return self._connection
 
     def query(self, query: Union[str, List[str]], params: Dict = None, max_records=0) -> List[Dict]:
         """Run an SQL query in snowflake"""
@@ -342,36 +350,36 @@ class DbSync:
                 self.logger.warning('LAST_QID is a reserved prepared statement parameter name, '
                                     'it will be overridden with each executed query!')
 
-        with self.open_connection() as connection:
-            with connection.cursor(snowflake.connector.DictCursor) as cur:
+        connection = self.open_connection()
+        with connection.cursor(snowflake.connector.DictCursor) as cur:
 
-                # Run every query in one transaction if query is a list of SQL
-                if isinstance(query, list):
-                    self.logger.debug('Starting Transaction')
-                    cur.execute("START TRANSACTION")
-                    queries = query
-                else:
-                    queries = [query]
+            # Run every query in one transaction if query is a list of SQL
+            if isinstance(query, list):
+                self.logger.debug('Starting Transaction')
+                cur.execute("START TRANSACTION")
+                queries = query
+            else:
+                queries = [query]
 
-                qid = None
+            qid = None
 
-                # pylint: disable=invalid-name
-                for q in queries:
+            # pylint: disable=invalid-name
+            for q in queries:
 
-                    # update the LAST_QID
-                    params['LAST_QID'] = qid
+                # update the LAST_QID
+                params['LAST_QID'] = qid
 
-                    self.logger.debug("Running query: '%s' with Params %s", q, params)
+                self.logger.debug("Running query: '%s' with Params %s", q, params)
 
-                    cur.execute(q, params)
-                    qid = cur.sfqid
+                cur.execute(q, params)
+                qid = cur.sfqid
 
-                    # Raise exception if returned rows greater than max allowed records
-                    if 0 < max_records < cur.rowcount:
-                        raise TooManyRecordsException(
-                            f"Query returned too many records. This query can return max {max_records} records")
+                # Raise exception if returned rows greater than max allowed records
+                if 0 < max_records < cur.rowcount:
+                    raise TooManyRecordsException(
+                        f"Query returned too many records. This query can return max {max_records} records")
 
-                    result = cur.fetchall()
+                result = cur.fetchall()
 
         return result
 
@@ -527,45 +535,45 @@ class DbSync:
         # MERGE does insert and update
         inserts = 0
         updates = 0
-        with self.open_connection() as connection:
-            with connection.cursor(snowflake.connector.DictCursor) as cur:
-                merge_sql = self.file_format.formatter.create_merge_sql(
-                    table_name=self.table_name(stream, False),
-                    stage_name=self.get_stage_name(stream),
-                    s3_prefix=s3_prefix,
-                    s3_key=s3_key,
-                    file_format_name=self.connection_config['file_format'],
-                    columns=columns_with_trans,
-                    pk_merge_condition=self.primary_key_merge_condition()
-                )
-                self.logger.info('Running query: %s', merge_sql)
-                cur.execute(merge_sql)
-                # Get number of inserted and updated records
-                results = cur.fetchall()
-                if len(results) > 0:
-                    inserts = results[0].get('number of rows inserted', 0)
-                    updates = results[0].get('number of rows updated', 0)
+        connection = self.open_connection()
+        with connection.cursor(snowflake.connector.DictCursor) as cur:
+            merge_sql = self.file_format.formatter.create_merge_sql(
+                table_name=self.table_name(stream, False),
+                stage_name=self.get_stage_name(stream),
+                s3_prefix=s3_prefix,
+                s3_key=s3_key,
+                file_format_name=self.connection_config['file_format'],
+                columns=columns_with_trans,
+                pk_merge_condition=self.primary_key_merge_condition()
+            )
+            self.logger.info('Running query: %s', merge_sql)
+            cur.execute(merge_sql)
+            # Get number of inserted and updated records
+            results = cur.fetchall()
+            if len(results) > 0:
+                inserts = results[0].get('number of rows inserted', 0)
+                updates = results[0].get('number of rows updated', 0)
         return inserts, updates
 
     def _load_file_copy(self, s3_key, s3_prefix, stream, columns_with_trans) -> int:
         # COPY does insert only
         inserts = 0
-        with self.open_connection() as connection:
-            with connection.cursor(snowflake.connector.DictCursor) as cur:
-                copy_sql = self.file_format.formatter.create_copy_sql(
-                    table_name=self.table_name(stream, False),
-                    stage_name=self.get_stage_name(stream),
-                    s3_prefix=s3_prefix,
-                    s3_key=s3_key,
-                    file_format_name=self.connection_config['file_format'],
-                    columns=columns_with_trans
-                )
-                self.logger.info('Running query: %s', copy_sql)
-                cur.execute(copy_sql)
-                # Get number of inserted records - COPY does insert only
-                results = cur.fetchall()
-                if len(results) > 0:
-                    inserts = sum([r.get('rows_loaded', 0) for r in results])
+        connection = self.open_connection()
+        with connection.cursor(snowflake.connector.DictCursor) as cur:
+            copy_sql = self.file_format.formatter.create_copy_sql(
+                table_name=self.table_name(stream, False),
+                stage_name=self.get_stage_name(stream),
+                s3_prefix=s3_prefix,
+                s3_key=s3_key,
+                file_format_name=self.connection_config['file_format'],
+                columns=columns_with_trans
+            )
+            self.logger.info('Running query: %s', copy_sql)
+            cur.execute(copy_sql)
+            # Get number of inserted records - COPY does insert only
+            results = cur.fetchall()
+            if len(results) > 0:
+                inserts = sum([r.get('rows_loaded', 0) for r in results])
         return inserts
 
     def primary_key_merge_condition(self):
