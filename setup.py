@@ -26,7 +26,7 @@ setup(name="pipelinewise-target-snowflake",
       install_requires=[
           'numpy==1.26.4',
           'pipelinewise-singer-python==1.*',
-          'snowflake-connector-python[pandas]==3.1.*',
+          'snowflake-connector-python[pandas]==3.15.*',
           'inflection==0.5.1',
           'joblib==1.2.0',
           'boto3==1.23.10',
