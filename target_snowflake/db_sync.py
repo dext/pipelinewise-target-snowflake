@@ -313,10 +313,6 @@ class DbSync:
             if self.stream_schema_message:
                 stream = self.stream_schema_message['stream']
 
-            self.logger.info("------------------------")
-            self.logger.info(f"New connection for table {self.table_name(stream, False)}")
-            self.logger.info("------------------------")
-
             self._connection = snowflake.connector.connect(
                 user=self.connection_config['user'],
                 password=self.connection_config.get('password'),
@@ -326,7 +322,6 @@ class DbSync:
                 database=self.connection_config['dbname'],
                 warehouse=self.connection_config['warehouse'],
                 role=self.connection_config.get('role'),
-                autocommit=True,
                 session_parameters={
                     # Quoted identifiers should be case sensitive
                     'QUOTED_IDENTIFIERS_IGNORE_CASE': 'FALSE',
@@ -381,6 +376,7 @@ class DbSync:
 
                 result = cur.fetchall()
 
+            cur.execute("COMMIT")
         return result
 
     def table_name(self, stream_name, is_temporary, without_schema=False):
