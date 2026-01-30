@@ -18,10 +18,10 @@ def create_copy_sql(table_name: str,
     """Generate a CSV compatible snowflake COPY INTO command"""
     p_columns = ', '.join([c['name'] for c in columns])
 
+        #    f"ON_ERROR = CONTINUE " \
     return f"COPY INTO {table_name} ({p_columns}) " \
            f"FROM '@{stage_name}/{s3_prefix}' " \
            f"PATTERN = '{s3_key}' " \
-           f"ON_ERROR = CONTINUE " \
            f"FILE_FORMAT = (format_name='{file_format_name}')"
 
 
