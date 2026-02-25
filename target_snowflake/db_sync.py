@@ -307,8 +307,11 @@ class DbSync:
         return bytes
 
     def open_connection(self):
-        if self._connection is None:
+        # Re-open if no connection or previously closed by a context manager user
+        if self._connection is None or getattr(self._connection, 'is_closed', lambda: False)():
             """Open snowflake connection"""
+
+            self.logger.debug('Opening Snowflake connection')
             stream = None
             if self.stream_schema_message:
                 stream = self.stream_schema_message['stream']
@@ -334,6 +337,15 @@ class DbSync:
 
         return self._connection
 
+    def close_connection(self):
+        """Close snowflake connection if open"""
+        if self._connection is not None:
+            try:
+                self.logger.debug('Closing Snowflake connection')
+                self._connection.close()
+            finally:
+                self._connection = None
+
     def query(self, query: Union[str, List[str]], params: Dict = None, max_records=0) -> List[Dict]:
         """Run an SQL query in snowflake"""
         result = []
@@ -346,37 +358,51 @@ class DbSync:
                                     'it will be overridden with each executed query!')
 
         connection = self.open_connection()
-        with connection.cursor(snowflake.connector.DictCursor) as cur:
 
-            # Run every query in one transaction if query is a list of SQL
-            if isinstance(query, list):
-                self.logger.debug('Starting Transaction')
-                cur.execute("START TRANSACTION")
-                queries = query
-            else:
-                queries = [query]
+        try:
+            with connection.cursor(snowflake.connector.DictCursor) as cur:
 
-            qid = None
+                # Run every query in one transaction if query is a list of SQL
+                if isinstance(query, list):
+                    self.logger.debug('Starting Transaction')
+                    cur.execute("START TRANSACTION")
+                    queries = query
+                else:
+                    queries = [query]
 
-            # pylint: disable=invalid-name
-            for q in queries:
+                qid = None
 
-                # update the LAST_QID
-                params['LAST_QID'] = qid
+                # pylint: disable=invalid-name
+                for q in queries:
 
-                self.logger.debug("Running query: '%s' with Params %s", q, params)
+                    # update the LAST_QID
+                    params['LAST_QID'] = qid
 
-                cur.execute(q, params)
-                qid = cur.sfqid
+                    self.logger.debug("Running query: '%s' with Params %s", q, params)
 
-                # Raise exception if returned rows greater than max allowed records
-                if 0 < max_records < cur.rowcount:
-                    raise TooManyRecordsException(
-                        f"Query returned too many records. This query can return max {max_records} records")
+                    cur.execute(q, params)
+                    qid = cur.sfqid
 
-                result = cur.fetchall()
+                    # Raise exception if returned rows greater than max allowed records
+                    if 0 < max_records < cur.rowcount:
+                        raise TooManyRecordsException(
+                            f"Query returned too many records. This query can return max {max_records} records")
 
-            cur.execute("COMMIT")
+                    result = cur.fetchall()
+
+                    cur.execute("COMMIT")
+        except Exception as e:
+            self.logger.error("Exception: %s \nError running query: '%s' with Params %s", e, query, params)
+            try:
+                with connection.cursor() as cur:
+                    cur.execute("ROLLBACK")
+            except Exception:
+                pass
+            raise
+
+        finally:
+            self.close_connection()
+
         return result
 
     def table_name(self, stream_name, is_temporary, without_schema=False):
@@ -532,44 +558,50 @@ class DbSync:
         inserts = 0
         updates = 0
         connection = self.open_connection()
-        with connection.cursor(snowflake.connector.DictCursor) as cur:
-            merge_sql = self.file_format.formatter.create_merge_sql(
-                table_name=self.table_name(stream, False),
-                stage_name=self.get_stage_name(stream),
-                s3_prefix=s3_prefix,
-                s3_key=s3_key,
-                file_format_name=self.connection_config['file_format'],
-                columns=columns_with_trans,
-                pk_merge_condition=self.primary_key_merge_condition()
-            )
-            self.logger.info('Running query: %s', merge_sql)
-            cur.execute(merge_sql)
-            # Get number of inserted and updated records
-            results = cur.fetchall()
-            if len(results) > 0:
-                inserts = results[0].get('number of rows inserted', 0)
-                updates = results[0].get('number of rows updated', 0)
+        try:
+            with connection.cursor(snowflake.connector.DictCursor) as cur:
+                merge_sql = self.file_format.formatter.create_merge_sql(
+                    table_name=self.table_name(stream, False),
+                    stage_name=self.get_stage_name(stream),
+                    s3_prefix=s3_prefix,
+                    s3_key=s3_key,
+                    file_format_name=self.connection_config['file_format'],
+                    columns=columns_with_trans,
+                    pk_merge_condition=self.primary_key_merge_condition()
+                )
+                self.logger.info('Running query: %s', merge_sql)
+                cur.execute(merge_sql)
+                # Get number of inserted and updated records
+                results = cur.fetchall()
+                if len(results) > 0:
+                    inserts = results[0].get('number of rows inserted', 0)
+                    updates = results[0].get('number of rows updated', 0)
+        finally:
+            self.close_connection()
         return inserts, updates
 
     def _load_file_copy(self, s3_key, s3_prefix, stream, columns_with_trans) -> int:
         # COPY does insert only
         inserts = 0
         connection = self.open_connection()
-        with connection.cursor(snowflake.connector.DictCursor) as cur:
-            copy_sql = self.file_format.formatter.create_copy_sql(
-                table_name=self.table_name(stream, False),
-                stage_name=self.get_stage_name(stream),
-                s3_prefix=s3_prefix,
-                s3_key=s3_key,
-                file_format_name=self.connection_config['file_format'],
-                columns=columns_with_trans
-            )
-            self.logger.info('Running query: %s', copy_sql)
-            cur.execute(copy_sql)
-            # Get number of inserted records - COPY does insert only
-            results = cur.fetchall()
-            if len(results) > 0:
-                inserts = sum([r.get('rows_loaded', 0) for r in results])
+        try:
+            with connection.cursor(snowflake.connector.DictCursor) as cur:
+                copy_sql = self.file_format.formatter.create_copy_sql(
+                    table_name=self.table_name(stream, False),
+                    stage_name=self.get_stage_name(stream),
+                    s3_prefix=s3_prefix,
+                    s3_key=s3_key,
+                    file_format_name=self.connection_config['file_format'],
+                    columns=columns_with_trans
+                )
+                self.logger.info('Running query: %s', copy_sql)
+                cur.execute(copy_sql)
+                # Get number of inserted records - COPY does insert only
+                results = cur.fetchall()
+                if len(results) > 0:
+                    inserts = sum([r.get('rows_loaded', 0) for r in results])
+        finally:
+            self.close_connection()
         return inserts
 
     def primary_key_merge_condition(self):
